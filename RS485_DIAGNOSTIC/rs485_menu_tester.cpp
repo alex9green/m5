@@ -27,6 +27,16 @@
 #include <M5Unified.h>
 #include <HardwareSerial.h>
 
+// ── Result types (here so forward declarations can reference it) ──
+enum Result : uint8_t { UNTESTED = 0, GOOD, BAD, SKIPPED, CONSOLE_PIN };
+
+// ── Forward declarations ─────────────────────────────────────────
+void startTest(int idx);
+void stopTest(bool silent = false);
+void markResult(Result r);
+void finishAuto();
+void printResults();
+
 // ── Config ──────────────────────────────────────────────────────
 #define SERIAL_BAUD     115200
 #define RS485_BAUD      9600
@@ -75,9 +85,7 @@ const RS485Pin PINS[] = {
 };
 const int TOTAL_PINS = sizeof(PINS) / sizeof(PINS[0]);
 
-// ── Result types ─────────────────────────────────────────────────
-enum Result : uint8_t { UNTESTED = 0, GOOD, BAD, SKIPPED, CONSOLE_PIN };
-
+// ── Result storage ────────────────────────────────────────────────
 Result  results[TOTAL_PINS];
 int     pktCounts[TOTAL_PINS];   // packets sent per pin
 
