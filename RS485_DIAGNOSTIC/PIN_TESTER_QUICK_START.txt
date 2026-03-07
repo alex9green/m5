@@ -1,0 +1,115 @@
+════════════════════════════════════════════════════════════════════
+  M5STAMP PLC K141 - RS485 PIN TESTER - QUICK START GUIDE v1.0
+════════════════════════════════════════════════════════════════════
+
+WHAT THIS DOES
+──────────────
+Generates a 1kHz square wave on each GPIO pin, one at a time.
+You connect an oscilloscope probe to verify which pins work.
+
+WHAT YOU NEED
+─────────────
+  ✓ M5Stack Stamp S3 / StamPLC K141
+  ✓ USB cable (for upload + Serial Monitor)
+  ✓ Oscilloscope (or logic analyzer)
+  ✓ Arduino IDE (with ESP32 board package installed)
+
+STEP 1 — OPEN IN ARDUINO IDE
+──────────────────────────────
+  File → Open → select: rs485_pin_tester.cpp
+  (rename to .ino if Arduino IDE requires it)
+
+STEP 2 — SELECT BOARD
+──────────────────────
+  Tools → Board → ESP32 Arduino → "M5Stack-StampS3"
+  (or "ESP32S3 Dev Module" if not found)
+
+  Tools → Upload Speed → 921600
+  Tools → Port → select your COM/ttyUSB port
+
+STEP 3 — UPLOAD
+────────────────
+  Click Upload (→ button)
+  Wait for "Done uploading"
+
+STEP 4 — OPEN SERIAL MONITOR
+──────────────────────────────
+  Tools → Serial Monitor
+  Baud rate: 115200
+  Line ending: Both NL & CR
+
+  You should see the header banner.
+
+STEP 5 — START TEST
+────────────────────
+  Type: s
+  Press: Enter
+
+  The program will now display the first pin to test.
+
+STEP 6 — TEST EACH PIN (5 SECONDS)
+────────────────────────────────────
+  For EACH pin displayed:
+
+  1. Connect oscilloscope probe to the GPIO pin shown
+  2. Ground the oscilloscope to M5Stack GND
+  3. Set oscilloscope: 1ms/div, 2V/div
+  4. Look for a repeating square wave:
+
+         3.3V  ┌──────┐      ┌──────┐
+               │      │      │      │
+         0V  ──┘      └──────┘      └──
+
+  5. If you see the wave → type 'g' + Enter (GOOD)
+     If no signal        → type 'b' + Enter (BAD)
+     To skip this pin    → type 'n' + Enter (SKIP)
+
+STEP 7 — VIEW RESULTS
+──────────────────────
+  After all pins are tested, results are shown automatically.
+  You can also type 'r' + Enter at any time to see current results.
+
+EXPECTED RESULTS (healthy M5Stack)
+────────────────────────────────────
+  Priority 1 (CRITICAL):
+    ✅ GPIO 0   — DE pin (main)
+    ✅ GPIO 39  — RE pin
+    ✅ GPIO 42  — TX
+    ✅ GPIO 43  — RX
+    ✅ GPIO 46  — DE backup
+
+  If all 5 critical pins show ✅:
+    → M5Stack hardware is OK
+    → Problem is RS485 wiring or firmware
+
+  If some critical pins show ❌:
+    → That GPIO may be damaged
+    → Use a Priority-2 alternative
+
+TROUBLESHOOTING
+────────────────
+  Problem: Program won't upload
+    → Check board selection (ESP32S3)
+    → Check COM port
+    → Hold BOOT button during upload start
+
+  Problem: Serial Monitor shows garbage
+    → Set baud rate to exactly 115200
+
+  Problem: All pins show BAD
+    → Check oscilloscope ground connection
+    → Check oscilloscope input impedance (should be 1MΩ)
+    → Verify M5Stack is powered
+
+  Problem: Watchdog reset during test
+    → Normal for some GPIOs (strapping pins)
+    → Device will restart automatically
+
+AFTER TESTING
+──────────────
+  1. Note which Priority-1 pins are GOOD
+  2. Open config_v3.h in your project
+  3. Set: #define RS485_DE_PIN_DEFAULT  <best_pin>
+  4. Re-upload your firmware
+
+════════════════════════════════════════════════════════════════════

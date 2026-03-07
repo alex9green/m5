@@ -1,0 +1,103 @@
+════════════════════════════════════════════════════════════════════
+  RS485 DIAGNOSTIC PACKAGE — SETUP INSTRUCTIONS
+  M5Stamp PLC K141 / SolarEast Heat Pump
+════════════════════════════════════════════════════════════════════
+
+PACKAGE CONTENTS
+─────────────────
+  rs485_pin_tester.cpp          Arduino firmware — GPIO pin tester
+  modbus_ping.py                Python — Modbus RTU ping
+  modbus_scan.py                Python — Auto-detect slave ID
+  modbus_sniffer.py             Python — Passive RS485 sniffer
+  RS485_DIAGNOSTIC_REPORT.md   Full diagnostic report
+  RS485_PIN_COMPATIBILITY_LIST.md  All GPIO pins + priorities
+  USB_RS485_TESTING_GUIDE.md   USB adapter testing guide
+  PIN_TESTER_QUICK_START.txt   This guide (for Arduino tester)
+  SETUP_INSTRUCTIONS.txt       This file
+
+════════════════════════════════════════════════════════════════════
+
+PATH A: ARDUINO GPIO PIN TESTER
+─────────────────────────────────
+  USE WHEN: You want to verify which GPIO pins output a signal
+  TOOLS:    M5Stack Stamp S3 + oscilloscope + Arduino IDE
+
+  1. Open Arduino IDE
+  2. File → Open → rs485_pin_tester.cpp
+  3. Tools → Board → M5Stack-StampS3
+  4. Click Upload
+  5. Open Serial Monitor (115200 baud)
+  6. Type 's' + Enter
+  7. Follow PIN_TESTER_QUICK_START.txt
+
+════════════════════════════════════════════════════════════════════
+
+PATH B: USB-RS485 PYTHON TESTER
+─────────────────────────────────
+  USE WHEN: You want to test communication with the heat pump
+  TOOLS:    USB-RS485 adapter + Python 3 + PC
+
+  Step 1: Install pyserial
+  ─────────────────────────
+    pip3 install pyserial
+
+  Step 2: Find your COM port
+  ───────────────────────────
+    Windows:  Device Manager → Ports
+    Linux:    ls /dev/ttyUSB*
+    Mac:      ls /dev/tty.usbserial*
+
+  Step 3: Ping test
+  ──────────────────
+    python3 modbus_ping.py --port COM3 --baud 9600 --slave 1
+
+    (replace COM3 with your actual port)
+
+  Step 4: If ping fails — scan for slave ID
+  ──────────────────────────────────────────
+    python3 modbus_scan.py --port COM3 --baud 9600 --start 1 --end 10
+
+  Step 5: If scan finds nothing — try 19200 baud
+  ─────────────────────────────────────────────────
+    python3 modbus_ping.py --port COM3 --baud 19200 --slave 1
+
+  Step 6: Sniff live traffic
+  ───────────────────────────
+    python3 modbus_sniffer.py --port COM3 --baud 9600 --duration 60
+
+════════════════════════════════════════════════════════════════════
+
+WIRING REFERENCE
+─────────────────
+  RS485 uses DIFFERENTIAL signaling (2 wires + ground):
+
+  ┌─────────────┐         ┌─────────────────┐
+  │  M5Stack    │         │   Heat Pump     │
+  │  GPIO 42    │────A+───│   A+ (or D+)    │
+  │  GPIO 43    │────B−───│   B− (or D−)    │
+  │  GND        │─────────│   GND           │
+  └─────────────┘         └─────────────────┘
+
+  ⚠️  If no response: SWAP A+ and B− wires!
+  ⚠️  Add 120Ω resistor between A+ and B− at one end
+
+════════════════════════════════════════════════════════════════════
+
+COMMON ERRORS
+──────────────
+  "No response (timeout)"
+    → Wrong baud rate (try 19200)
+    → Wrong slave ID (run scan)
+    → A+/B− swapped (swap wires)
+    → Pump Modbus disabled (enable in pump menu)
+    → Missing GND connection
+
+  "CRC error"
+    → Missing 120Ω termination resistor
+    → Cable too long (>10m without repeater)
+    → Electrical noise (use shielded cable)
+
+  "Wrong slave ID"
+    → Run modbus_scan.py to find correct ID
+
+════════════════════════════════════════════════════════════════════
