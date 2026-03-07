@@ -361,7 +361,7 @@ void startTest(int idx) {
     M5.Display.fillScreen(BLACK);
 }
 
-void stopTest(bool silent = false) {
+void stopTest(bool silent) {
     if (!testActive) return;
     RS485Serial.end();
     delay(50);
