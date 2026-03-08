@@ -305,9 +305,10 @@ private:
         serial.begin(MODBUS_BAUDRATE, MODBUS_CONFIG);
 
         // Incearca hardware RS485 mode; daca esueaza, fallback la manual DE
-        esp_err_t err = serial.setMode(UART_MODE_RS485_HALF_DUPLEX);
-        if (err != ESP_OK) {
-            LOG_W("PINSCAN", "setMode GPIO %d err=%d → manual DE control", dePin, err);
+        // IMPORTANT: setMode() returneaza bool (true=succes) in Arduino ESP32!
+        bool hwModeOK = serial.setMode(UART_MODE_RS485_HALF_DUPLEX);
+        if (!hwModeOK) {
+            LOG_W("PINSCAN", "setMode GPIO %d ESUAT → manual DE control", dePin);
             // Configureaza pin DE ca output pentru control manual
             pinMode(dePin, OUTPUT);
             digitalWrite(dePin, LOW);

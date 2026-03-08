@@ -66,10 +66,11 @@ public:
         delay(10);
 
         // Step 3: Incearca hardware RS485 half-duplex mode
-        // Daca esueaza, folosim manual DE control (la fel de fiabil cu flush()).
-        esp_err_t err = _serial->setMode(UART_MODE_RS485_HALF_DUPLEX);
-        if (err != ESP_OK) {
-            LOG_W("MODBUS", "setMode(RS485_HALF_DUPLEX) err=%d → manual DE control", err);
+        // IMPORTANT: setMode() returneaza bool (true=succes, false=esec) in Arduino ESP32!
+        // NU stoca ca esp_err_t - comparatia cu ESP_OK(0) ar inversa logica!
+        bool hwModeOK = _serial->setMode(UART_MODE_RS485_HALF_DUPLEX);
+        if (!hwModeOK) {
+            LOG_W("MODBUS", "setMode(RS485_HALF_DUPLEX) ESUAT → fallback manual DE control");
             LOG_I("MODBUS", "  → GPIO %d controlat MANUAL (digitalWrite + flush)", dePin);
             // Configureaza GPIO ca output pentru control manual
             pinMode(dePin, OUTPUT);

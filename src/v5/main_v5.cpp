@@ -796,12 +796,17 @@ void initButtons() {
 
 // ============================================================================
 // checkButtons() - Verifica butoane cu edge detection (tranzitie HIGH→LOW)
-// Edge detection previne spam-ul cand GPIO citeste LOW permanent.
+// Debounce per-buton: fiecare buton are propriul timer, independent de celelalte.
+// BUG FIX: starea lastBtnState se actualizeaza INTOTDEAUNA la sfarsit, nu in
+//          fereastra de debounce. Actualizarea in debounce reseta edge-detection
+//          si cauza spam (KEYA la fiecare 300ms cand GPIO39 e LOW permanent).
 // ============================================================================
 static bool lastBtnStateA = HIGH;
 static bool lastBtnStateB = HIGH;
 static bool lastBtnStateC = HIGH;
-static uint32_t lastBtnPress = 0;
+static uint32_t debounceA = 0;  // Timer debounce per buton (independent!)
+static uint32_t debounceB = 0;
+static uint32_t debounceC = 0;
 
 void checkButtons() {
     bool stateA = digitalRead(BUTTON_A_PIN);
@@ -809,16 +814,10 @@ void checkButtons() {
     bool stateC = digitalRead(BUTTON_C_PIN);
 
     uint32_t now = millis();
-    if (now - lastBtnPress < 300) {  // Debounce global
-        lastBtnStateA = stateA;
-        lastBtnStateB = stateB;
-        lastBtnStateC = stateC;
-        return;
-    }
 
-    // Detectie tranzitie HIGH→LOW (apasare, nu tinere)
-    if (stateA == LOW && lastBtnStateA == HIGH) {
-        lastBtnPress = now;
+    // Detectie tranzitie HIGH→LOW + debounce per-buton
+    if (stateA == LOW && lastBtnStateA == HIGH && now - debounceA >= 300) {
+        debounceA = now;
         LOG_I("BTN", "KEYA: Reset statistici");
         memset(&sysStats, 0, sizeof(sysStats));
         modbus.stats = {0};
@@ -826,14 +825,14 @@ void checkButtons() {
         modbus.stats.hwModeEnabled = modbus.isHWModeActive() ? 1 : 0;
     }
 
-    if (stateB == LOW && lastBtnStateB == HIGH) {
-        lastBtnPress = now;
+    if (stateB == LOW && lastBtnStateB == HIGH && now - debounceB >= 300) {
+        debounceB = now;
         LOG_I("BTN", "KEYB: Citire imediata");
         performRead();
     }
 
-    if (stateC == LOW && lastBtnStateC == HIGH) {
-        lastBtnPress = now;
+    if (stateC == LOW && lastBtnStateC == HIGH && now - debounceC >= 300) {
+        debounceC = now;
         // Cicleaza log level: INFO → DEBUG → VERBOSE → INFO
         uint8_t current = DebugLogger::getLevel();
         uint8_t next;
@@ -844,6 +843,7 @@ void checkButtons() {
         LOG_I("BTN", "KEYC: Log level → %d", next);
     }
 
+    // Actualizeaza starea DUPA edge-check (nu inainte!) pentru a nu reseta detectia
     lastBtnStateA = stateA;
     lastBtnStateB = stateB;
     lastBtnStateC = stateC;
