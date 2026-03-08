@@ -37,10 +37,11 @@ struct PinTestResult {
     int      timeoutCount;
     int      crcErrorCount;
     int      totalTests;
-    float    successRate;
+    float    successRate;     // % din SUCCESS pur
+    float    effectiveScore;  // SUCCESS=100%, CRC_ERROR=partial, TIMEOUT=0%
     bool     hwModeWorking;
     uint32_t avgResponseMs;
-    char     verdict[32];  // "BEST", "PASS", "FAIL", "ECHO", "TIMEOUT"
+    char     verdict[32];  // "PASS", "CRC-RASPUNS!", "ECHO", "TIMEOUT", "PARTIAL"
 };
 
 // ============================================================================
@@ -122,8 +123,10 @@ public:
 
             if (resultCount < MAX_CANDIDATES) {
                 results[resultCount] = r;
-                if (r.successRate > bestRate) {
-                    bestRate = r.successRate;
+                // Comparam effectiveScore: SUCCESS(100%) > CRC_ERROR(30%) > TIMEOUT(0%)
+                // CRC_ERROR inseamna semnal real primit → hardware conectat!
+                if (r.effectiveScore > bestRate) {
+                    bestRate = r.effectiveScore;
                     bestPinIndex = resultCount;
                     bestTxPin = tx;
                     bestRxPin = rx;
@@ -142,12 +145,28 @@ public:
 
         printResults();
 
-        if (bestPinIndex >= 0 && results[bestPinIndex].successRate >= PIN_SCAN_SUCCESS_RATE) {
-            uint8_t bestDE = results[bestPinIndex].pin;
-            LOG_I("PINSCAN", "✓ CONFIGURATIE OPTIMA: TX=%d RX=%d DE=%d (%.0f%%)",
-                  bestTxPin, bestRxPin, bestDE, results[bestPinIndex].successRate);
-            saveToNVS(bestDE, bestTxPin, bestRxPin);
-            return bestDE;
+        if (bestPinIndex >= 0) {
+            PinTestResult& best = results[bestPinIndex];
+
+            if (best.successRate >= PIN_SCAN_SUCCESS_RATE) {
+                // Succes complet
+                LOG_I("PINSCAN", "✓ CONFIGURATIE OPTIMA: TX=%d RX=%d DE=%d (%.0f%% succes)",
+                      bestTxPin, bestRxPin, best.pin, best.successRate);
+                saveToNVS(best.pin, bestTxPin, bestRxPin);
+                return best.pin;
+            }
+
+            if (best.crcErrorCount > 0) {
+                // Semnal real primit dar CRC gresit → hardware e corect!
+                // Posibil: baud rate gresit sau frame trunchiat.
+                // Salvam configuratia oricum si continuam.
+                LOG_W("PINSCAN", "⚠ CRC ERRORS pe TX=%d RX=%d DE=%d → semnal real detectat!",
+                      bestTxPin, bestRxPin, best.pin);
+                LOG_W("PINSCAN", "⚠ Hardware conectat. Verifica baud rate (%d bps) si Slave ID.",
+                      MODBUS_BAUDRATE);
+                saveToNVS(best.pin, bestTxPin, bestRxPin);
+                return best.pin;
+            }
         }
 
         LOG_E("PINSCAN", "NICIO COMBINATIE TX/RX/DE NU FUNCTIONEAZA!");
@@ -231,19 +250,30 @@ public:
         r.successRate   = (float)r.successCount / PIN_SCAN_TESTS_PER_PIN * 100.0f;
         r.avgResponseMs = totalMs / PIN_SCAN_TESTS_PER_PIN;
 
+        // effectiveScore: SUCCESS=100%, CRC_ERROR=partial (semnal real dar CRC gresit),
+        // TIMEOUT/ECHO=0%. CRC_ERROR este MULT mai bun decat TIMEOUT → hardware conectat!
+        r.effectiveScore = r.successRate;
+        if (r.effectiveScore == 0.0f && r.crcErrorCount > 0) {
+            // 30% per CRC error: garanteaza ca bate orice timeout (0%)
+            r.effectiveScore = (float)r.crcErrorCount / PIN_SCAN_TESTS_PER_PIN * 30.0f;
+        }
+
         if (r.successRate >= PIN_SCAN_SUCCESS_RATE) {
             snprintf(r.verdict, sizeof(r.verdict), "PASS");
         } else if (r.echoCount > r.successCount) {
             snprintf(r.verdict, sizeof(r.verdict), "ECHO");
+        } else if (r.crcErrorCount > 0 && r.timeoutCount == 0) {
+            snprintf(r.verdict, sizeof(r.verdict), "CRC-RASPUNS!");  // SEMNAL REAL!
         } else if (r.timeoutCount >= PIN_SCAN_TESTS_PER_PIN) {
             snprintf(r.verdict, sizeof(r.verdict), "TIMEOUT");
         } else {
-            snprintf(r.verdict, sizeof(r.verdict), "FAIL");
+            snprintf(r.verdict, sizeof(r.verdict), "PARTIAL");
         }
 
-        LOG_I("PINSCAN", "TX=%d RX=%d DE=%d: %s [%d/%d, %.0f%%, avg %lu ms]",
-              txPin, rxPin, dePin, r.verdict, r.successCount, PIN_SCAN_TESTS_PER_PIN,
-              r.successRate, r.avgResponseMs);
+        LOG_I("PINSCAN", "TX=%d RX=%d DE=%d: %s [succ=%d crc=%d tout=%d, score=%.0f%%, avg %lu ms]",
+              txPin, rxPin, dePin, r.verdict,
+              r.successCount, r.crcErrorCount, r.timeoutCount,
+              r.effectiveScore, r.avgResponseMs);
         return r;
     }
 
@@ -309,20 +339,26 @@ public:
         r.successRate  = (float)r.successCount / PIN_SCAN_TESTS_PER_PIN * 100.0f;
         r.avgResponseMs = totalMs / PIN_SCAN_TESTS_PER_PIN;
 
-        // Verdict
+        r.effectiveScore = r.successRate;
+        if (r.effectiveScore == 0.0f && r.crcErrorCount > 0) {
+            r.effectiveScore = (float)r.crcErrorCount / PIN_SCAN_TESTS_PER_PIN * 30.0f;
+        }
+
         if (r.successRate >= PIN_SCAN_SUCCESS_RATE) {
             snprintf(r.verdict, sizeof(r.verdict), "PASS");
         } else if (r.echoCount > r.successCount) {
-            snprintf(r.verdict, sizeof(r.verdict), "ECHO (DE greșit!)");
+            snprintf(r.verdict, sizeof(r.verdict), "ECHO");
+        } else if (r.crcErrorCount > 0 && r.timeoutCount == 0) {
+            snprintf(r.verdict, sizeof(r.verdict), "CRC-RASPUNS!");
         } else if (r.timeoutCount >= PIN_SCAN_TESTS_PER_PIN) {
             snprintf(r.verdict, sizeof(r.verdict), "TIMEOUT");
         } else {
-            snprintf(r.verdict, sizeof(r.verdict), "FAIL");
+            snprintf(r.verdict, sizeof(r.verdict), "PARTIAL");
         }
 
-        LOG_I("PINSCAN", "GPIO %d: %s [%d/%d, %.0f%%, avg %lu ms]",
-              pin, r.verdict, r.successCount, PIN_SCAN_TESTS_PER_PIN,
-              r.successRate, r.avgResponseMs);
+        LOG_I("PINSCAN", "GPIO %d: %s [succ=%d crc=%d tout=%d, score=%.0f%%, avg %lu ms]",
+              pin, r.verdict, r.successCount, r.crcErrorCount, r.timeoutCount,
+              r.effectiveScore, r.avgResponseMs);
 
         return r;
     }
@@ -339,28 +375,27 @@ public:
 
         for (int i = 0; i < resultCount; i++) {
             PinTestResult& r = results[i];
-            bool isBest = (i == bestPinIndex &&
-                           r.successRate >= PIN_SCAN_SUCCESS_RATE);
+            bool isBest = (i == bestPinIndex);
 
-            LOG_I("PINSCAN", "GPIO %-2d  %-5d  %-5d  %-5d  %-5d  %6.0f%%  %5lu ms  %s%s",
-                  r.pin, r.successCount, r.echoCount,
-                  r.timeoutCount, r.crcErrorCount,
-                  r.successRate, r.avgResponseMs,
-                  r.verdict,
+            LOG_I("PINSCAN", "DE=%-2d  succ=%-3d crc=%-3d tout=%-3d  score=%5.0f%%  %5lu ms  %s%s",
+                  r.pin, r.successCount, r.crcErrorCount,
+                  r.timeoutCount, r.effectiveScore,
+                  r.avgResponseMs, r.verdict,
                   isBest ? " ← BEST" : "");
         }
 
         if (bestPinIndex >= 0) {
+            PinTestResult& b = results[bestPinIndex];
             LOG_SEPARATOR();
-            LOG_I("PINSCAN", "✓ RECOMANDAT: GPIO %d (%.0f%%)",
-                  results[bestPinIndex].pin,
-                  results[bestPinIndex].successRate);
-
-            if (results[bestPinIndex].pin == 0) {
-                LOG_I("PINSCAN", "  → GPIO 0 = pin oficial StamPLC.pdf ✓ PERFECT!");
+            if (b.successRate >= PIN_SCAN_SUCCESS_RATE) {
+                LOG_I("PINSCAN", "✓ BEST: TX=%d RX=%d DE=%d → %.0f%% succes",
+                      bestTxPin, bestRxPin, b.pin, b.successRate);
+            } else if (b.crcErrorCount > 0) {
+                LOG_W("PINSCAN", "~ BEST: TX=%d RX=%d DE=%d → CRC errors (semnal real!)",
+                      bestTxPin, bestRxPin, b.pin);
+                LOG_W("PINSCAN", "  → Baud rate gresit? Slave ID gresit? Frame trunchiat?");
             } else {
-                LOG_W("PINSCAN", "  → Atentie: GPIO %d != GPIO 0 (oficial)",
-                      results[bestPinIndex].pin);
+                LOG_E("PINSCAN", "✗ Niciun candidat cu semnal real detectat.");
             }
         }
         LOG_SEPARATOR();
@@ -472,7 +507,7 @@ private:
             digitalWrite(_currentDePin, LOW);
         }
 
-        // Asteapta raspuns
+        // Asteapta primul byte
         uint32_t waitStart = millis();
         while (!serial.available()) {
             if (millis() - waitStart > PIN_SCAN_TIMEOUT_MS) {
@@ -481,13 +516,17 @@ private:
             delay(1);
         }
 
-        delay(50);  // Asteapta toate bytes-urile
-
-        // Citeste raspunsul
-        uint8_t response[128];
-        size_t rxLen = 0;
-        while (serial.available() && rxLen < sizeof(response)) {
-            response[rxLen++] = serial.read();
+        // Citeste TOATE bytes-urile pana la 20ms de liniste pe linie
+        // La 9600 baud: 87 bytes = ~91ms, deci NU mai facem delay fix!
+        // 20ms inter-byte timeout captureaza sfarsitul frame-ului.
+        uint8_t  response[128];
+        size_t   rxLen      = 0;
+        uint32_t lastRxTime = millis();
+        while (millis() - lastRxTime < 20 && rxLen < sizeof(response)) {
+            if (serial.available()) {
+                response[rxLen++] = serial.read();
+                lastRxTime = millis();
+            }
         }
 
         if (rxLen < 5) return OUTCOME_TIMEOUT;
@@ -497,6 +536,17 @@ private:
         if (memcmp(request, response, cmpLen) == 0) {
             return OUTCOME_ECHO;
         }
+
+        // Log bytes bruti - ESENTIAL pentru diagnosticare
+        char hexBuf[128 * 3 + 1];
+        hexBuf[0] = '\0';
+        for (size_t i = 0; i < rxLen && i < 32; i++) {
+            char tmp[4];
+            snprintf(tmp, sizeof(tmp), "%02X ", response[i]);
+            strncat(hexBuf, tmp, sizeof(hexBuf) - strlen(hexBuf) - 1);
+        }
+        if (rxLen > 32) strncat(hexBuf, "...", sizeof(hexBuf) - strlen(hexBuf) - 1);
+        LOG_D("PINSCAN", "  RX [%d bytes]: %s", rxLen, hexBuf);
 
         // CRC check
         if (!_checkCRC(response, rxLen)) {
