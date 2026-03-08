@@ -46,29 +46,50 @@ struct PinTestResult {
 // ============================================================================
 // PinTesterV5 CLASS
 // ============================================================================
+// Structura pentru o pereche UART TX/RX candidata
+// ============================================================================
+struct UARTPair {
+    uint8_t tx;
+    uint8_t rx;
+    uint8_t de_default;  // Pinul DE implicit pentru aceasta pereche
+};
+
+// ============================================================================
 class PinTesterV5 {
 public:
 
-    static const int MAX_CANDIDATES = 8;
+    static const int MAX_CANDIDATES = 12;
     PinTestResult results[MAX_CANDIDATES];
     int           resultCount = 0;
     int           bestPinIndex = -1;
 
-    // Pinii candidati in ordinea prioritatii
-    // GPIO 0 = PRIMUL (pin oficial StamPLC.pdf!)
+    // Pinii candidati DE in ordinea prioritatii
     uint8_t candidates[PIN_SCAN_COUNT] = PIN_SCAN_CANDIDATES;
 
+    // Cel mai bun set TX/RX gasit (populat de scanAllUARTPairs)
+    uint8_t bestTxPin = RS485_TX_PIN;
+    uint8_t bestRxPin = RS485_RX_PIN;
+
     // ------------------------------------------------------------------------
-    // scanAll() - Testeaza TOTI pinii candidati
-    // Returneaza GPIO-ul recomandat (0 daca niciunul nu functioneaza)
+    // scanAllUARTPairs() - Testeaza combinatii TX/RX/DE
+    // Inlocuieste scanAll() - testeaza si perechile UART, nu doar DE.
+    // Returneaza DE-ul recomandat; seteaza bestTxPin/bestRxPin.
     // ------------------------------------------------------------------------
-    uint8_t scanAll(HardwareSerial& serial) {
+    uint8_t scanAllUARTPairs(HardwareSerial& serial) {
+        // Perechile TX/RX candidate cu DE-ul default al fiecareia
+        static const UARTPair pairs[] = RS485_UART_CANDIDATES;
+        static const int pairCount    = RS485_UART_PAIR_COUNT;
+
+        // Pinii DE de testat pentru fiecare pereche TX/RX
+        static const uint8_t dePins[] = PIN_SCAN_CANDIDATES;
 
         LOG_SEPARATOR();
-        LOG_I("PINSCAN", "=== PIN SCAN v5 - Test DE Pin RS485 ===");
-        LOG_I("PINSCAN", "Candidati: {0, 46, 2, 1, 4, 5} ← GPIO 0 PRIMUL!");
-        LOG_I("PINSCAN", "Metoda: hardware UART_MODE_RS485_HALF_DUPLEX");
-        LOG_I("PINSCAN", "Teste per pin: %d", PIN_SCAN_TESTS_PER_PIN);
+        LOG_I("PINSCAN", "=== PIN SCAN v5 - Scan UART TX/RX/DE ===");
+        LOG_I("PINSCAN", "Perechi TX/RX testate: %d", pairCount);
+        LOG_I("PINSCAN", "  [0] TX=42 RX=43 DE=0  (StamPLC.pdf oficial)");
+        LOG_I("PINSCAN", "  [1] TX=0  RX=39 DE=46 (hardware observat)");
+        LOG_I("PINSCAN", "  [2] TX=0  RX=1  DE=46 (analiza alternativa)");
+        LOG_I("PINSCAN", "Metoda: UART_MODE_RS485_HALF_DUPLEX + fallback manual");
         LOG_I("PINSCAN", "Success threshold: %d%%", PIN_SCAN_SUCCESS_RATE);
         LOG_SEPARATOR();
 
@@ -76,56 +97,158 @@ public:
         bestPinIndex = -1;
         float bestRate = -1.0f;
 
-        for (int i = 0; i < PIN_SCAN_COUNT && resultCount < MAX_CANDIDATES; i++) {
-            uint8_t pin = candidates[i];
+        for (int p = 0; p < pairCount; p++) {
+            uint8_t tx = pairs[p].tx;
+            uint8_t rx = pairs[p].rx;
+            uint8_t de = pairs[p].de_default;
 
-            LOG_I("PINSCAN", "--- Test GPIO %d ---", pin);
+            LOG_I("PINSCAN", "--- Pereche %d: TX=%d RX=%d (testez DE=%d) ---",
+                  p, tx, rx, de);
 
-            PinTestResult r = testPin(serial, pin);
-            results[resultCount] = r;
-
-            // Actualizeaza best
-            if (r.successRate > bestRate) {
-                bestRate = r.successRate;
-                bestPinIndex = resultCount;
+            // Atentie: GPIO 39 = si KEYA buton!
+            if (rx == 39) {
+                LOG_W("PINSCAN", "  ⚠ RX=GPIO39 conflicteaza cu BUTTON_A!");
+                LOG_W("PINSCAN", "  ⚠ Daca aceasta pereche e corecta, butoanele trebuie reconfigurate.");
             }
 
-            resultCount++;
+            // Reconfigureaza UART cu noua pereche TX/RX
+            serial.end();
+            delay(50);
+            serial.setPins(rx, tx, -1, de);
+            serial.begin(MODBUS_BAUDRATE, MODBUS_CONFIG);
+            delay(20);
 
-            // Daca gasim GPIO 0 cu 100% success, nu mai continuam
-            if (pin == 0 && r.successRate >= 100.0f) {
-                LOG_I("PINSCAN", "✓ GPIO 0 = 100%% success! Scan complet.");
+            PinTestResult r = testPinWithUART(serial, de, tx, rx);
+
+            if (resultCount < MAX_CANDIDATES) {
+                results[resultCount] = r;
+                if (r.successRate > bestRate) {
+                    bestRate = r.successRate;
+                    bestPinIndex = resultCount;
+                    bestTxPin = tx;
+                    bestRxPin = rx;
+                }
+                resultCount++;
+            }
+
+            if (r.successRate >= 100.0f) {
+                LOG_I("PINSCAN", "✓ TX=%d RX=%d DE=%d → 100%% succes! Scan oprit.",
+                      tx, rx, de);
                 break;
             }
 
-            delay(200);  // Pauza intre teste
+            delay(200);
         }
 
         printResults();
 
         if (bestPinIndex >= 0 && results[bestPinIndex].successRate >= PIN_SCAN_SUCCESS_RATE) {
-            uint8_t bestPin = results[bestPinIndex].pin;
-            LOG_I("PINSCAN", "✓ BEST PIN: GPIO %d (%.0f%% success)",
-                  bestPin, results[bestPinIndex].successRate);
-
-            if (bestPin != 0) {
-                LOG_W("PINSCAN", "⚠ Cel mai bun pin NU e GPIO 0 (oficial)!");
-                LOG_W("PINSCAN", "⚠ Verifica hardware-ul StamPLC!");
-            }
-
-            saveToNVS(bestPin);
-            return bestPin;
+            uint8_t bestDE = results[bestPinIndex].pin;
+            LOG_I("PINSCAN", "✓ CONFIGURATIE OPTIMA: TX=%d RX=%d DE=%d (%.0f%%)",
+                  bestTxPin, bestRxPin, bestDE, results[bestPinIndex].successRate);
+            saveToNVS(bestDE, bestTxPin, bestRxPin);
+            return bestDE;
         }
 
-        LOG_E("PINSCAN", "NICI UN PIN NU FUNCTIONEAZA!");
-        LOG_E("PINSCAN", "  → Verifica conexiunile hardware");
-        LOG_E("PINSCAN", "  → Verifica alimentarea dispozitivului RS485");
-        LOG_E("PINSCAN", "  → Verifica baudrate (curent: %d)", MODBUS_BAUDRATE);
-        return 0xFF;  // Eroare - niciun pin valid
+        LOG_E("PINSCAN", "NICIO COMBINATIE TX/RX/DE NU FUNCTIONEAZA!");
+        LOG_E("PINSCAN", "  → Verifica conexiunile A/B la pompa de caldura");
+        LOG_E("PINSCAN", "  → Verifica ca PWR-485 VCC 5V e alimentat");
+        LOG_E("PINSCAN", "  → Verifica baudrate (curent: %d bps)", MODBUS_BAUDRATE);
+        LOG_E("PINSCAN", "  → Verifica terminatia 120Ω pe linia RS485");
+        return 0xFF;
     }
 
     // ------------------------------------------------------------------------
-    // testPin() - Testeaza un singur pin
+    // scanAll() - Scan doar DE (TX/RX ramanand la valorile curente)
+    // Compatibilitate backwards - apeleaza scanAllUARTPairs() complet.
+    // ------------------------------------------------------------------------
+    uint8_t scanAll(HardwareSerial& serial) {
+        return scanAllUARTPairs(serial);
+    }
+
+    // ------------------------------------------------------------------------
+    // testPinWithUART() - Testeaza un singur pin DE cu TX/RX specifice
+    // UART trebuie deja initializat cu TX/RX dorit inainte de apel.
+    // ------------------------------------------------------------------------
+    PinTestResult testPinWithUART(HardwareSerial& serial, uint8_t dePin,
+                                   uint8_t txPin, uint8_t rxPin) {
+        PinTestResult r;
+        r.pin           = dePin;
+        r.successCount  = 0;
+        r.echoCount     = 0;
+        r.timeoutCount  = 0;
+        r.crcErrorCount = 0;
+        r.totalTests    = PIN_SCAN_TESTS_PER_PIN;
+        r.hwModeWorking = false;
+        r.avgResponseMs = 0;
+        uint32_t totalMs = 0;
+
+        // Incearca hardware RS485 mode pe UART-ul deja initializat
+        bool hwModeOK = serial.setMode(UART_MODE_RS485_HALF_DUPLEX);
+        if (!hwModeOK) {
+            LOG_W("PINSCAN", "TX=%d RX=%d DE=%d → manual DE control", txPin, rxPin, dePin);
+            pinMode(dePin, OUTPUT);
+            digitalWrite(dePin, LOW);
+            _currentDePin = dePin;
+            _useManualDE  = true;
+        } else {
+            serial.setHwFlowCtrlMode(UART_HW_FLOWCTRL_DISABLE);
+            _currentDePin = dePin;
+            _useManualDE  = false;
+        }
+        r.hwModeWorking = !_useManualDE;
+
+        uint8_t request[8] = {0x01, 0x03, 0x00, 0x00, 0x00, 0x29, 0x84, 0x14};
+        LOG_D("PINSCAN", "TX=%d RX=%d DE=%d: %d teste...", txPin, rxPin, dePin, PIN_SCAN_TESTS_PER_PIN);
+
+        for (int t = 0; t < PIN_SCAN_TESTS_PER_PIN; t++) {
+            uint32_t startMs = millis();
+            TestOutcome outcome = _runOneTest(serial, request, 8);
+            uint32_t duration = millis() - startMs;
+            totalMs += duration;
+
+            switch (outcome) {
+                case OUTCOME_SUCCESS:
+                    r.successCount++;
+                    LOG_D("PINSCAN", "  Test %d: ✓ SUCCESS (%lu ms)", t+1, duration);
+                    break;
+                case OUTCOME_ECHO:
+                    r.echoCount++;
+                    LOG_D("PINSCAN", "  Test %d: ↩ ECHO (DE nu comuta)");
+                    break;
+                case OUTCOME_TIMEOUT:
+                    r.timeoutCount++;
+                    LOG_D("PINSCAN", "  Test %d: ⏱ TIMEOUT (%lu ms)", t+1, duration);
+                    break;
+                case OUTCOME_CRC_ERROR:
+                    r.crcErrorCount++;
+                    LOG_D("PINSCAN", "  Test %d: ✗ CRC ERROR (%lu ms)", t+1, duration);
+                    break;
+            }
+            delay(100);
+        }
+
+        r.successRate   = (float)r.successCount / PIN_SCAN_TESTS_PER_PIN * 100.0f;
+        r.avgResponseMs = totalMs / PIN_SCAN_TESTS_PER_PIN;
+
+        if (r.successRate >= PIN_SCAN_SUCCESS_RATE) {
+            snprintf(r.verdict, sizeof(r.verdict), "PASS");
+        } else if (r.echoCount > r.successCount) {
+            snprintf(r.verdict, sizeof(r.verdict), "ECHO");
+        } else if (r.timeoutCount >= PIN_SCAN_TESTS_PER_PIN) {
+            snprintf(r.verdict, sizeof(r.verdict), "TIMEOUT");
+        } else {
+            snprintf(r.verdict, sizeof(r.verdict), "FAIL");
+        }
+
+        LOG_I("PINSCAN", "TX=%d RX=%d DE=%d: %s [%d/%d, %.0f%%, avg %lu ms]",
+              txPin, rxPin, dePin, r.verdict, r.successCount, PIN_SCAN_TESTS_PER_PIN,
+              r.successRate, r.avgResponseMs);
+        return r;
+    }
+
+    // ------------------------------------------------------------------------
+    // testPin() - Testeaza un singur pin DE (cu TX/RX curent configurate)
     // ------------------------------------------------------------------------
     PinTestResult testPin(HardwareSerial& serial, uint8_t pin) {
         PinTestResult r;
@@ -244,26 +367,31 @@ public:
     }
 
     // ------------------------------------------------------------------------
-    // saveToNVS() - Salveaza pinul in flash
+    // saveToNVS() - Salveaza configuratia TX/RX/DE in flash
     // ------------------------------------------------------------------------
-    void saveToNVS(uint8_t pin) {
+    void saveToNVS(uint8_t dePin, uint8_t txPin = RS485_TX_PIN,
+                   uint8_t rxPin = RS485_RX_PIN) {
         Preferences prefs;
         prefs.begin(NVS_NAMESPACE, false);
-        prefs.putUChar(NVS_KEY_DE_PIN, pin);
+        prefs.putUChar(NVS_KEY_DE_PIN, dePin);
+        prefs.putUChar("tx_pin", txPin);
+        prefs.putUChar("rx_pin", rxPin);
         prefs.putUInt("magic", NVS_MAGIC);
         prefs.end();
-        LOG_I("PINSCAN", "Pinul GPIO %d salvat in NVS", pin);
+        LOG_I("PINSCAN", "Configuratie salvata NVS: TX=%d RX=%d DE=%d", txPin, rxPin, dePin);
     }
 
     // ------------------------------------------------------------------------
-    // loadFromNVS() - Citeste pinul din flash
+    // loadFromNVS() - Citeste configuratia TX/RX/DE din flash
     // Returneaza 0xFF daca nu e salvat valid
     // ------------------------------------------------------------------------
-    static uint8_t loadFromNVS() {
+    static uint8_t loadFromNVS(uint8_t* txOut = nullptr, uint8_t* rxOut = nullptr) {
         Preferences prefs;
         prefs.begin(NVS_NAMESPACE, true);
-        uint32_t magic = prefs.getUInt("magic", 0);
-        uint8_t pin = prefs.getUChar(NVS_KEY_DE_PIN, 0xFF);
+        uint32_t magic  = prefs.getUInt("magic", 0);
+        uint8_t  dePin  = prefs.getUChar(NVS_KEY_DE_PIN, 0xFF);
+        uint8_t  txPin  = prefs.getUChar("tx_pin", RS485_TX_PIN);
+        uint8_t  rxPin  = prefs.getUChar("rx_pin", RS485_RX_PIN);
         prefs.end();
 
         if (magic != NVS_MAGIC) {
@@ -271,8 +399,10 @@ public:
             return 0xFF;
         }
 
-        LOG_I("PINSCAN", "NVS: pin GPIO %d gasit (magic OK)", pin);
-        return pin;
+        if (txOut) *txOut = txPin;
+        if (rxOut) *rxOut = rxPin;
+        LOG_I("PINSCAN", "NVS: TX=%d RX=%d DE=%d (magic OK)", txPin, rxPin, dePin);
+        return dePin;
     }
 
 private:

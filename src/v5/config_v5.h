@@ -22,18 +22,31 @@
 #define FW_DESCRIPTION          "Hardware RS485 + SD Debug Logging"
 
 // ============================================================================
-// RS485 PINS - OFICIAL M5Stack StamPLC.pdf pagina 9
+// RS485 PINS - M5Stack StamPLC
 // ============================================================================
-// PWR-485 Interface:
-//   GPIO 42 → RS485_TX/BOOT  ← CORECT (neschimbat)
-//   GPIO 43 → RS485_RX       ← CORECT (neschimbat)
-//   GPIO 0  → RS485_DIR (DE/RE) ← FIX! Was: 2, 46, 1, 4, 5 (GREȘIT!)
-// NOTE: GPIO 0 este OK după boot! Pull-up intern în hardware StamPLC.
-// NOTE: Hardware UART_MODE_RS485_HALF_DUPLEX controlează GPIO 0 automat.
-#define RS485_TX_PIN            42      // GPIO 42 - TX (CORECT)
-#define RS485_RX_PIN            43      // GPIO 43 - RX (CORECT)
-#define RS485_DE_PIN            0       // GPIO 0  - DIR/DE (FIX! Oficial!)
+// ATENTIE: Exista doua variante hardware documentate diferit:
+//
+//   Varianta A (StamPLC.pdf oficial nou):
+//     TX=42, RX=43, DE=0
+//
+//   Varianta B (hardware observat de utilizator / varianta veche):
+//     TX=0,  RX=39, DE=46
+//     CONFLICT: GPIO 39 = si KEYA buton! Daca RS485 RX=39, butonul nu merge.
+//
+//   Varianta C (sugerat in analize alternative):
+//     TX=0,  RX=1,  DE=46
+//
+// Pini activi = setati de scanul RS485 la boot.
+// Default initial = Varianta A (cel mai comun).
+#define RS485_TX_PIN            42      // Default Varianta A - suprascris de scan
+#define RS485_RX_PIN            43      // Default Varianta A - suprascris de scan
+#define RS485_DE_PIN            0       // Default Varianta A - suprascris de scan
 #define RS485_UART_NUM          UART_NUM_1
+
+// Perechi TX/RX UART de testat la scan (in ordinea prioritatii)
+// {TX, RX, DE_default_pentru_aceasta_pereche}
+#define RS485_UART_CANDIDATES   {{42,43,0},{0,39,46},{0,1,46}}
+#define RS485_UART_PAIR_COUNT   3
 
 // ============================================================================
 // MODBUS SETTINGS
@@ -57,13 +70,26 @@
 #define BLOCK3_COUNT            0x0008  // 8 registre
 
 // ============================================================================
-// SD CARD PINS - M5Stack StamPLC oficial
+// SD CARD PINS - M5Stack StamPLC
+// CS=10 este fix pe toate variantele StamPLC cunoscute.
+// SCK/MOSI/MISO variaza intre revisii hardware - scanam la boot.
 // ============================================================================
-#define SD_MISO_PIN             9
-#define SD_CS_PIN               10
+#define SD_CS_PIN               10      // CS: fix GPIO 10 pe StamPLC
+#define SD_SPI_FREQ             1000000 // 1MHz la scan, mai sigur decat 4MHz
+
+// Pini activi (setati de scanul SD la boot, default = varianta 1):
+#define SD_MISO_PIN             9       // Override de scanul SD daca detecteaza alta varianta
 #define SD_SCK_PIN              7
 #define SD_MOSI_PIN             8
-#define SD_SPI_FREQ             4000000 // 4MHz - stabil si sigur
+
+// Configuratii SPI cunoscute pentru M5StampPLC (SCK, MOSI, MISO)
+// Ordinea = prioritate: varianta 1 testata prima
+//  Var 1: SCK=12 MOSI=11 MISO=9  → K141 rev >= 1.1 (cel mai probabil!)
+//  Var 2: SCK=7  MOSI=8  MISO=9  → K141 rev 1.0 / generic SPI2
+//  Var 3: SCK=36 MOSI=35 MISO=37 → varianta M5Stack Stack-style
+//  Var 4: SCK=5  MOSI=6  MISO=7  → varianta SPI2 ESP32-S3 default
+#define SD_SCAN_CONFIGS         {{12,11,9,"K141-v1.1"},{7,8,9,"K141-v1.0"},{36,35,37,"M5Stack-SPI3"},{5,6,7,"SPI2-default"}}
+#define SD_SCAN_COUNT           4
 
 // SD Log files
 #define SD_LOG_FILE_DEBUG       "/debug_v5.log"   // Debug complet

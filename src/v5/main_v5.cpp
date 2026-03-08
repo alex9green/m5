@@ -66,6 +66,8 @@ bool     sdAvailable     = false;
 bool     wifiConnected   = false;
 bool     modbusOK        = false;
 uint8_t  activeDePin     = RS485_DE_PIN;
+uint8_t  activeTxPin     = RS485_TX_PIN;
+uint8_t  activeRxPin     = RS485_RX_PIN;
 
 // Bufer pentru history date (web interface)
 #define HISTORY_SIZE 60
@@ -185,9 +187,8 @@ void setup() {
 
     LOG_SEPARATOR();
     LOG_I("BOOT", "=== SETUP COMPLET - v%s ===", FW_VERSION);
-    LOG_I("BOOT", "RS485 DE Pin: GPIO %d %s",
-          activeDePin,
-          activeDePin == 0 ? "(OFICIAL ✓)" : "(NON-STANDARD!)");
+    LOG_I("BOOT", "RS485: TX=GPIO%d RX=GPIO%d DE=GPIO%d",
+          activeTxPin, activeRxPin, activeDePin);
     LOG_I("BOOT", "Hardware RS485 mode: %s",
           modbus.isHWModeActive() ? "ACTIV ✓" : "INACTIV ✗");
     LOG_I("BOOT", "SD Card: %s", sdAvailable ? "OK ✓" : "LIPSA ✗");
@@ -245,22 +246,44 @@ void loop() {
 }
 
 // ============================================================================
-// initSD() - Initializeaza SD card
+// initSD() - Initializeaza SD card cu scan automat de pini SPI
+// Testeaza configuratii SPI cunoscute pentru M5StampPLC si variante.
+// CS=10 este fix; SCK/MOSI/MISO variaza intre revisii hardware.
 // ============================================================================
 bool initSD() {
-    Serial.println("[SD] Initializing SD card...");
+    Serial.println("[SD] Scan pini SPI SD card...");
 
-    SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+    // Configuratii SPI de testat (SCK, MOSI, MISO, nume)
+    struct SDPinConfig { uint8_t sck; uint8_t mosi; uint8_t miso; const char* name; };
+    static const SDPinConfig configs[] = SD_SCAN_CONFIGS;
 
-    if (!SD.begin(SD_CS_PIN, SPI, SD_SPI_FREQ)) {
-        Serial.println("[SD] EROARE: SD card nu raspunde!");
-        return false;
+    for (int i = 0; i < SD_SCAN_COUNT; i++) {
+        uint8_t sck  = configs[i].sck;
+        uint8_t mosi = configs[i].mosi;
+        uint8_t miso = configs[i].miso;
+
+        Serial.printf("[SD] Testez: SCK=%d MOSI=%d MISO=%d CS=%d (%s)...\n",
+                      sck, mosi, miso, SD_CS_PIN, configs[i].name);
+
+        SPI.end();
+        delay(10);
+        SPI.begin(sck, miso, mosi, SD_CS_PIN);  // SPI.begin(sck, miso, mosi, ss)
+        delay(10);
+
+        if (SD.begin(SD_CS_PIN, SPI, SD_SPI_FREQ)) {
+            uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+            Serial.printf("[SD] OK! %s: SCK=%d MOSI=%d MISO=%d CS=%d | %llu MB\n",
+                          configs[i].name, sck, mosi, miso, SD_CS_PIN, cardSize);
+            return true;
+        }
+
+        SD.end();
+        Serial.printf("[SD] ✗ %s esuat\n", configs[i].name);
     }
 
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    Serial.printf("[SD] OK! Marime: %llu MB\n", cardSize);
-
-    return true;
+    Serial.println("[SD] EROARE: SD card nu raspunde pe nicio configuratie SPI!");
+    Serial.println("[SD] Verifica: card fizic montat? Contacte curate?");
+    return false;
 }
 
 // ============================================================================
@@ -312,61 +335,81 @@ bool initNTP() {
 }
 
 // ============================================================================
-// initModbus() - CONFIGURATIE HARDWARE RS485 MODE
+// initModbus() - CONFIGURATIE HARDWARE RS485 MODE cu scan TX/RX/DE
 // ============================================================================
 bool initModbus() {
     LOG_I("MODBUS", "=== Initializare RS485 Modbus v5 ===");
 
-    // Verifica daca avem un pin salvat din sesiunea anterioara
-    uint8_t savedPin = PinTesterV5::loadFromNVS();
+    // Verifica daca avem o configuratie TX/RX/DE salvata din sesiunea anterioara
+    uint8_t savedTx = RS485_TX_PIN, savedRx = RS485_RX_PIN;
+    uint8_t savedPin = PinTesterV5::loadFromNVS(&savedTx, &savedRx);
 
     if (savedPin != 0xFF) {
-        // Avem pin salvat - incearca cu el direct
-        LOG_I("MODBUS", "Utilizare pin GPIO %d din NVS", savedPin);
+        // Configuratie salvata - incearca cu ea direct
+        LOG_I("MODBUS", "NVS: TX=%d RX=%d DE=%d", savedTx, savedRx, savedPin);
         activeDePin = savedPin;
+        activeTxPin = savedTx;
+        activeRxPin = savedRx;
+
+        // Reconfigureaza UART cu pinii salvati
+        ModbusSerial.end();
+        delay(20);
+        ModbusSerial.setPins(activeRxPin, activeTxPin, -1, activeDePin);
 
         bool ok = modbus.init(ModbusSerial, activeDePin);
-
         if (!ok) {
-            LOG_W("MODBUS", "Init cu pin salvat a esuat → rulare pin scan");
+            LOG_W("MODBUS", "Init cu config salvata a esuat → rescan");
             goto do_scan;
         }
 
-        // Verifica ca pin-ul salvat chiar functioneaza
-        LOG_I("MODBUS", "Verificare rapida pin GPIO %d...", activeDePin);
-        PinTestResult r = pinTester.testPin(ModbusSerial, activeDePin);
-
+        // Verifica rapida
+        PinTestResult r = pinTester.testPinWithUART(ModbusSerial, activeDePin,
+                                                     activeTxPin, activeRxPin);
         if (r.successRate < PIN_SCAN_SUCCESS_RATE) {
-            LOG_W("MODBUS", "Pin GPIO %d nu mai functioneaza (%.0f%%) → rescan",
-                  activeDePin, r.successRate);
+            LOG_W("MODBUS", "Config salvata nu functioneaza (%.0f%%) → rescan",
+                  r.successRate);
             goto do_scan;
         }
 
-        LOG_I("MODBUS", "Pin GPIO %d OK (%.0f%%) ✓", activeDePin, r.successRate);
+        LOG_I("MODBUS", "✓ Config salvata OK (%.0f%%): TX=%d RX=%d DE=%d",
+              r.successRate, activeTxPin, activeRxPin, activeDePin);
         return true;
     }
 
 do_scan:
-    // Pin scan complet - include GPIO 0 PRIMUL!
-    LOG_I("MODBUS", "Rulare pin scan complet...");
-    uint8_t bestPin = pinTester.scanAll(ModbusSerial);
+    // Scan complet TX/RX/DE - testeaza toate combinatiile cunoscute
+    LOG_I("MODBUS", "Rulare scan complet TX/RX/DE...");
+    uint8_t bestPin = pinTester.scanAllUARTPairs(ModbusSerial);
 
     if (bestPin == 0xFF) {
-        LOG_E("MODBUS", "Pin scan ESUAT - niciun pin valid!");
-
-        // Fallback: incearca cu GPIO 0 (oficial) oricum
-        LOG_W("MODBUS", "Fallback: incerc GPIO 0 direct...");
-        activeDePin = 0;
+        LOG_E("MODBUS", "Scan ESUAT - nicio configuratie valida!");
+        LOG_W("MODBUS", "Fallback: incerc TX=42 RX=43 DE=0 (varianta A)...");
+        activeTxPin = 42; activeRxPin = 43; activeDePin = 0;
+        ModbusSerial.end();
+        delay(20);
+        ModbusSerial.setPins(43, 42, -1, 0);
         return modbus.init(ModbusSerial, 0);
     }
 
     activeDePin = bestPin;
+    activeTxPin = pinTester.bestTxPin;
+    activeRxPin = pinTester.bestRxPin;
+
+    // ATENTIE: daca RX=39 si avem si buton pe 39 → conflict hardware
+    if (activeRxPin == 39) {
+        LOG_W("MODBUS", "⚠ RS485 RX=GPIO39 = acelasi pin cu BUTTON_A!");
+        LOG_W("MODBUS", "⚠ Butonul KEYA nu va functiona corect cu RS485 activ.");
+    }
+
+    // Re-initializeaza Modbus cu pinii gasiti de scan
+    ModbusSerial.end();
+    delay(20);
+    ModbusSerial.setPins(activeRxPin, activeTxPin, -1, activeDePin);
     bool ok = modbus.init(ModbusSerial, activeDePin);
 
     if (ok) {
-        LOG_I("MODBUS", "✓ Modbus initializat cu GPIO %d", activeDePin);
+        LOG_I("MODBUS", "✓ Modbus: TX=%d RX=%d DE=%d", activeTxPin, activeRxPin, activeDePin);
     }
-
     return ok;
 }
 
