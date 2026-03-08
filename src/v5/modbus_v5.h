@@ -64,31 +64,34 @@ public:
         // RTS este folosit ca DE pin in hardware RS485 mode
         _serial->setPins(RS485_RX_PIN, RS485_TX_PIN, -1, dePin);
 
-        // Step 3: Enable hardware RS485 half-duplex mode
-        // Aceasta linie face hardware-ul sa controleze dePin automat!
-        // GPIO 0 va fi HIGH cand UART transmite, LOW cand asculta
+        // Step 3: Incearca hardware RS485 half-duplex mode
+        // In Arduino-ESP32 3.x (ESP-IDF 5.x), setPins() trebuie apelat
+        // inainte de begin() pentru ca setMode() sa functioneze.
+        // Daca esueaza, folosim manual DE control (la fel de fiabil cu flush()).
         esp_err_t err = _serial->setMode(UART_MODE_RS485_HALF_DUPLEX);
         if (err != ESP_OK) {
-            LOG_E("MODBUS", "EROARE setMode(RS485_HALF_DUPLEX): %d", err);
-            LOG_E("MODBUS", "  → Hardware RS485 mode ESUAT!");
+            LOG_W("MODBUS", "setMode(RS485_HALF_DUPLEX) err=%d → manual DE control", err);
+            LOG_I("MODBUS", "  → GPIO %d controlat MANUAL (digitalWrite + flush)", dePin);
+            // Configureaza GPIO ca output pentru control manual
+            pinMode(dePin, OUTPUT);
+            digitalWrite(dePin, LOW);  // DE LOW = receiver mode (implicit)
             stats.hwModeEnabled = 0;
             _hwMode = false;
-            return false;
+        } else {
+            // Step 4: Disable hardware flow control (nu e necesar pentru RS485)
+            _serial->setHwFlowCtrlMode(UART_HW_FLOWCTRL_DISABLE);
+            stats.hwModeEnabled = 1;
+            _hwMode = true;
+            LOG_I("MODBUS", "✓ Hardware RS485 HALF-DUPLEX mode ACTIV");
+            LOG_I("MODBUS", "  → GPIO %d controlat AUTOMAT de UART", dePin);
         }
 
-        // Step 4: Disable hardware flow control (nu e necesar pentru RS485)
-        _serial->setHwFlowCtrlMode(UART_HW_FLOWCTRL_DISABLE);
-
-        stats.hwModeEnabled = 1;
-        _hwMode = true;
         _initialized = true;
 
-        LOG_I("MODBUS", "✓ Hardware RS485 HALF-DUPLEX mode ACTIV");
-        LOG_I("MODBUS", "  → GPIO %d controlat AUTOMAT de UART", dePin);
-        LOG_I("MODBUS", "  → Nu mai e nevoie de digitalWrite()!");
-        LOG_I("MODBUS", "  → Timing perfect la nivel de bit");
+        LOG_I("MODBUS", "✓ Modbus initializat (DE=GPIO %d, mode=%s)",
+              dePin, _hwMode ? "HARDWARE" : "MANUAL");
 
-        // Confirma cu un test intern
+        // Confirma configuratie
         _validateHWMode();
 
         return true;
@@ -243,14 +246,18 @@ private:
 
         uint32_t txStart = millis();
 
-        // TRIMITE - Hardware controlează GPIO 0/DE automat!
-        // Nu mai trebuie:
-        //   digitalWrite(_dePin, HIGH); // STERS
-        //   delayMicroseconds(500);     // STERS
+        // TRIMITE
+        // Hardware mode: GPIO 0/DE controlat automat de UART
+        // Manual mode: control explicit cu flush() pentru timing corect
+        if (!_hwMode) {
+            digitalWrite(_dePin, HIGH);  // DE HIGH = transmit mode
+            delayMicroseconds(100);      // Stabilizare linie
+        }
         _serial->write(request, reqLen);
-        _serial->flush();  // Asteapta TX complet
-        // Nu mai trebuie:
-        //   digitalWrite(_dePin, LOW);  // STERS
+        _serial->flush();  // Asteapta TX complet (CRITIC pentru manual mode!)
+        if (!_hwMode) {
+            digitalWrite(_dePin, LOW);   // DE LOW = receive mode
+        }
 
         uint32_t txEnd = millis();
         LOG_TIMING("TX duration", txEnd - txStart);

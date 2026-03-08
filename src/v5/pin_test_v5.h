@@ -139,14 +139,14 @@ public:
         r.avgResponseMs = 0;
         uint32_t totalMs = 0;
 
-        // Configureaza UART cu noul pin
+        // Configureaza UART cu noul pin (hardware sau manual fallback)
         if (!_initUARTWithPin(serial, pin)) {
             LOG_E("PINSCAN", "GPIO %d: Nu pot initializa UART!", pin);
             r.successRate = 0;
             snprintf(r.verdict, sizeof(r.verdict), "INIT_FAIL");
             return r;
         }
-        r.hwModeWorking = true;
+        r.hwModeWorking = !_useManualDE;
 
         // Modbus Block 1 request (hardcodat din Elfin protocol)
         uint8_t request[8] = {0x01, 0x03, 0x00, 0x00, 0x00, 0x29, 0x84, 0x14};
@@ -277,6 +277,9 @@ public:
 
 private:
 
+    uint8_t _currentDePin = 0xFF;  // Pin DE curent (pentru manual control)
+    bool    _useManualDE  = false;  // true = manual digitalWrite, false = hardware UART
+
     enum TestOutcome {
         OUTCOME_SUCCESS,
         OUTCOME_ECHO,
@@ -286,6 +289,7 @@ private:
 
     // ------------------------------------------------------------------------
     // _initUARTWithPin() - Reinitializeaza UART cu noul pin DE
+    // Daca hardware RS485 mode esueaza, foloseste manual DE control.
     // ------------------------------------------------------------------------
     bool _initUARTWithPin(HardwareSerial& serial, uint8_t dePin) {
         // End previous session
@@ -299,17 +303,23 @@ private:
         // Set pins: RX, TX, CTS=-1, RTS=dePin
         serial.setPins(RS485_RX_PIN, RS485_TX_PIN, -1, dePin);
 
-        // Hardware RS485 mode (GPIO controlat automat)
+        // Incearca hardware RS485 mode; daca esueaza, fallback la manual DE
         esp_err_t err = serial.setMode(UART_MODE_RS485_HALF_DUPLEX);
         if (err != ESP_OK) {
-            LOG_E("PINSCAN", "setMode ESUAT pentru GPIO %d: %d", dePin, err);
-            return false;
+            LOG_W("PINSCAN", "setMode GPIO %d err=%d → manual DE control", dePin, err);
+            // Configureaza pin DE ca output pentru control manual
+            pinMode(dePin, OUTPUT);
+            digitalWrite(dePin, LOW);
+            _currentDePin = dePin;
+            _useManualDE  = true;
+        } else {
+            serial.setHwFlowCtrlMode(UART_HW_FLOWCTRL_DISABLE);
+            _currentDePin = dePin;
+            _useManualDE  = false;
         }
 
-        serial.setHwFlowCtrlMode(UART_HW_FLOWCTRL_DISABLE);
         delay(20);  // Stabilizare
-
-        return true;
+        return true;  // Intotdeauna continuam (hardware sau manual)
     }
 
     // ------------------------------------------------------------------------
@@ -319,9 +329,16 @@ private:
         // Goleste buffer RX
         while (serial.available()) serial.read();
 
-        // Trimite - hardware controlează DE automat
+        // Trimite - hardware sau manual DE control
+        if (_useManualDE && _currentDePin != 0xFF) {
+            digitalWrite(_currentDePin, HIGH);
+            delayMicroseconds(100);
+        }
         serial.write(request, reqLen);
-        serial.flush();
+        serial.flush();  // Asteapta TX complet (CRITIC pentru manual mode!)
+        if (_useManualDE && _currentDePin != 0xFF) {
+            digitalWrite(_currentDePin, LOW);
+        }
 
         // Asteapta raspuns
         uint32_t waitStart = millis();

@@ -181,7 +181,7 @@ public:
         log(LOG_LEVEL_INFO, "RS485", "=== STATISTICI RS485 ===");
         log(LOG_LEVEL_INFO, "RS485", "  DE Pin: GPIO %d", s.dePin);
         log(LOG_LEVEL_INFO, "RS485", "  HW Mode: %s",
-            s.hwModeEnabled ? "ACTIV (hardware auto)" : "INACTIV (manual - GREȘIT!)");
+            s.hwModeEnabled ? "ACTIV (hardware auto)" : "MANUAL (digitalWrite+flush)");
         log(LOG_LEVEL_INFO, "RS485", "  TX Count: %lu", s.txCount);
         log(LOG_LEVEL_INFO, "RS485", "  RX Count: %lu", s.rxCount);
         log(LOG_LEVEL_INFO, "RS485", "  RX Valid: %lu", s.rxValidCount);
