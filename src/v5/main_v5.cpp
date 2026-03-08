@@ -795,15 +795,30 @@ void initButtons() {
 }
 
 // ============================================================================
-// checkButtons() - Verifica butoane
+// checkButtons() - Verifica butoane cu edge detection (tranzitie HIGH→LOW)
+// Edge detection previne spam-ul cand GPIO citeste LOW permanent.
 // ============================================================================
+static bool lastBtnStateA = HIGH;
+static bool lastBtnStateB = HIGH;
+static bool lastBtnStateC = HIGH;
 static uint32_t lastBtnPress = 0;
 
 void checkButtons() {
-    if (millis() - lastBtnPress < 300) return;  // Debounce
+    bool stateA = digitalRead(BUTTON_A_PIN);
+    bool stateB = digitalRead(BUTTON_B_PIN);
+    bool stateC = digitalRead(BUTTON_C_PIN);
 
-    if (digitalRead(BUTTON_A_PIN) == LOW) {
-        lastBtnPress = millis();
+    uint32_t now = millis();
+    if (now - lastBtnPress < 300) {  // Debounce global
+        lastBtnStateA = stateA;
+        lastBtnStateB = stateB;
+        lastBtnStateC = stateC;
+        return;
+    }
+
+    // Detectie tranzitie HIGH→LOW (apasare, nu tinere)
+    if (stateA == LOW && lastBtnStateA == HIGH) {
+        lastBtnPress = now;
         LOG_I("BTN", "KEYA: Reset statistici");
         memset(&sysStats, 0, sizeof(sysStats));
         modbus.stats = {0};
@@ -811,14 +826,14 @@ void checkButtons() {
         modbus.stats.hwModeEnabled = modbus.isHWModeActive() ? 1 : 0;
     }
 
-    if (digitalRead(BUTTON_B_PIN) == LOW) {
-        lastBtnPress = millis();
+    if (stateB == LOW && lastBtnStateB == HIGH) {
+        lastBtnPress = now;
         LOG_I("BTN", "KEYB: Citire imediata");
         performRead();
     }
 
-    if (digitalRead(BUTTON_C_PIN) == LOW) {
-        lastBtnPress = millis();
+    if (stateC == LOW && lastBtnStateC == HIGH) {
+        lastBtnPress = now;
         // Cicleaza log level: INFO → DEBUG → VERBOSE → INFO
         uint8_t current = DebugLogger::getLevel();
         uint8_t next;
@@ -828,6 +843,10 @@ void checkButtons() {
         DebugLogger::setLevel(next);
         LOG_I("BTN", "KEYC: Log level → %d", next);
     }
+
+    lastBtnStateA = stateA;
+    lastBtnStateB = stateB;
+    lastBtnStateC = stateC;
 }
 
 // ============================================================================

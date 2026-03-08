@@ -296,12 +296,13 @@ private:
         serial.end();
         delay(50);
 
-        // Reinitializeaza cu noul pin
-        serial.begin(MODBUS_BAUDRATE, MODBUS_CONFIG,
-                     RS485_RX_PIN, RS485_TX_PIN);
-
-        // Set pins: RX, TX, CTS=-1, RTS=dePin
+        // CRITIC: setPins() INAINTE de begin() pentru ca RTS sa fie
+        // configurat la instalarea driverului UART (uart_driver_install).
+        // Altfel setMode(RS485_HALF_DUPLEX) va esua cu ESP_FAIL.
         serial.setPins(RS485_RX_PIN, RS485_TX_PIN, -1, dePin);
+
+        // Reinitializeaza cu noul pin (driverul stie de RTS=dePin)
+        serial.begin(MODBUS_BAUDRATE, MODBUS_CONFIG);
 
         // Incearca hardware RS485 mode; daca esueaza, fallback la manual DE
         esp_err_t err = serial.setMode(UART_MODE_RS485_HALF_DUPLEX);

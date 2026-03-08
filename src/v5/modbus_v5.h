@@ -55,18 +55,17 @@ public:
               (dePin == 0) ? "(OFICIAL StamPLC.pdf ✓)" : "(NON-STANDARD!)");
         LOG_I("MODBUS", "Baudrate: %d bps", MODBUS_BAUDRATE);
 
-        // Step 1: Begin UART
-        _serial->begin(MODBUS_BAUDRATE, MODBUS_CONFIG,
-                       RS485_RX_PIN, RS485_TX_PIN);
-        delay(10);
-
-        // Step 2: Set pins explicit (RX, TX, CTS=-1, RTS=dePin)
-        // RTS este folosit ca DE pin in hardware RS485 mode
+        // Step 1: Set pins INAINTE de begin() - CRITIC pentru setMode()!
+        // RTS=dePin trebuie cunoscut de driver la instalare (uart_driver_install).
+        // Daca setPins() e apelat dupa begin(), driverul e deja instalat fara RTS
+        // si setMode(RS485_HALF_DUPLEX) va esua cu ESP_FAIL.
         _serial->setPins(RS485_RX_PIN, RS485_TX_PIN, -1, dePin);
 
+        // Step 2: Begin UART (driverul se instaleaza cu RTS=dePin deja setat)
+        _serial->begin(MODBUS_BAUDRATE, MODBUS_CONFIG);
+        delay(10);
+
         // Step 3: Incearca hardware RS485 half-duplex mode
-        // In Arduino-ESP32 3.x (ESP-IDF 5.x), setPins() trebuie apelat
-        // inainte de begin() pentru ca setMode() sa functioneze.
         // Daca esueaza, folosim manual DE control (la fel de fiabil cu flush()).
         esp_err_t err = _serial->setMode(UART_MODE_RS485_HALF_DUPLEX);
         if (err != ESP_OK) {
