@@ -43,7 +43,7 @@
 #define MODBUS_SLAVE_ID         0x01
 #define MODBUS_TIMEOUT_MS       1000
 #define MODBUS_RETRY_COUNT      3
-#define MODBUS_INTER_BLOCK_MS   50    // Delay intre blocuri
+#define MODBUS_INTER_BLOCK_MS   110   // Delay intre blocuri (>100ms cerut de protocol!)
 #define MODBUS_RESPONSE_WAIT_MS 100   // Timp asteptare raspuns
 
 // ============================================================================
